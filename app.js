@@ -642,6 +642,7 @@ function markMembershipSigned(c, key) {
   if (key !== 'membership' || !c || c.membershipStage === 'Signed') return;
   c.membershipStage = 'Signed';
   ensureFunnels(c).member = true;   // funnel redesign: a signed member IS in the Member funnel — else the Signed terminal is hidden (funnelTrackA needs inFunnel('member'))
+  const log = ensureFunnelLog(c).member; if (!log.Signed) log.Signed = {}; if (!log.Signed.date) log.Signed.date = TODAY_ISO;   // stamp the reached-date so the blue closed-won layer shows when it happened (auto-sign has no reachFunnelStage path)
   logAction(c, 'Membership agreement signed → Signed');
 }
 function signCardAgreement(c, k, signature, selfie) {
@@ -9428,26 +9429,31 @@ function columnEl(col, session) {
   // stamp the VIEW identity (list vs which record) so render() keys scroll memory by it
   const cs = card.dataset.card && session.cards ? session.cards[card.dataset.card] : null;
   card.dataset.view = (cs && cs.mode === 'standard' && cs.recId != null) ? `${cs.recType || ''}:${cs.recId}` : 'list';
-  if (document.body.classList.contains('is-phone')) {
-    // §M7 — EXACTLY the pre-scroll-snap §M6 layout, verified against the old build: BOTH chip
-    // rows sit ABOVE the card, not inside it. The toggle chips (mobileNavEl → .mdock-row) and the
-    // search/graph/sort chips (the listbar in a .mdock-searchslot) float above the card; the card
-    // itself (hazard cap + list) sits below. The .col is a flex column so the card fills the rest
-    // and its body scrolls; the two chip rows are fixed-height at the top of the column.
-    wrap.appendChild(mobileNavEl(active));
-    const lb = card.querySelector('.card-body .listbar');
-    if (lb) { const slot = el('div', 'mdock-searchslot'); slot.appendChild(lb); wrap.appendChild(slot); }
-    wrap.appendChild(card);
-    // §M/R32 — the phone Back/Forward jog is NOT in the column; it lives always-on in the
-    // footer tool bar (mobileToolbarEl → .mfoot-jog), reflecting the snapped column's card.
-    return wrap;
-  }
-  // Desktop: the sub-card tab strip + search/sort bar live INSIDE the card top (a full-width card
+  // Phone builds its panels via mobileRailPanelEl (the §M8 5-card swipe rail); columnEl is the
+  // DESKTOP/tablet path only. The sub-card tab strip + search/sort bar live INSIDE the card top (a full-width card
   // header, so the card-body scrollbar runs only through the list, not a gutter beside the bar).
   card.insertBefore(colTabsEl(col, active, session), card.firstChild);
   const lb = card.querySelector('.card-body .listbar'), body = card.querySelector('.card-body');
   if (lb && body) card.insertBefore(lb, body);
   const st = card.querySelector('.card-body .rus'); if (st && body) card.insertBefore(st, body);   // §13.7 — flex-basis 25% resolves against .card, the full column
+  wrap.appendChild(card);
+  return wrap;
+}
+// §M8 — one phone SWIPE-RAIL panel for a SPECIFIC member (not a column's active member): the
+// same chip row + search slot + card that columnEl stacks per-column on desktop, but keyed to an
+// explicit card so the ribbon can place Categories/Units (and Customers/Sales) as their own
+// separate swipe stops. BOTH chip rows sit ABOVE the card (toggle chips + the search/graph/sort
+// listbar); the card (hazard cap + list) sits below and its body scrolls. Phone only — the
+// Back/Forward jog stays always-on in the footer tool bar (mobileToolbarEl → .mfoot-jog).
+function mobileRailPanelEl(member, session) {
+  const wrap = el('div', 'col'); wrap.dataset.col = COLUMN_OF[member] || '';
+  const card = memberCardEl(member, session);
+  // stamp the VIEW identity (list vs which record) so render() keys scroll memory by it
+  const cs = card.dataset.card && session.cards ? session.cards[card.dataset.card] : null;
+  card.dataset.view = (cs && cs.mode === 'standard' && cs.recId != null) ? `${cs.recType || ''}:${cs.recId}` : 'list';
+  wrap.appendChild(mobileNavEl(member));                                      // toggle chip row, this panel's card highlighted
+  const lb = card.querySelector('.card-body .listbar');
+  if (lb) { const slot = el('div', 'mdock-searchslot'); slot.appendChild(lb); wrap.appendChild(slot); }
   wrap.appendChild(card);
   return wrap;
 }
@@ -10194,7 +10200,10 @@ function toolsMenuRows() {
     + item('js-gps-issues', I.alert, 'GPS Issues')
     + item('js-gps-utilization', I.graph, 'Fleet Utilization')
     + item('js-gps-bouncie-trucks', CARD_ICON.units, 'Pull Bouncie Trucks');
-  let html = fam('General', general) + fam('GPS / Fleet', gps);
+  // Phone folds the (dropped) comms bell here: Requests · Transports due · Notifications, shown
+  // as an always-open Alerts section at the top so they never hide behind a collapsed family.
+  const alertRows = document.body.classList.contains('is-phone') ? commsMenuRows({ noInbox: false }) : '';
+  let html = (alertRows ? `<div class="dd-sec">Alerts</div>${alertRows}` : '') + fam('General', general) + fam('GPS / Fleet', gps);
   if (devUnlocked()) {
     html += fam('Developer', item('js-lint', I.eye, 'Design lint (R0)', document.body.classList.contains('rw-lint'))
       + item('js-inspect', I.search, 'Design Inspector', state.inspect)
@@ -10206,7 +10215,9 @@ function toolsMenuRows() {
 }
 function openToolsMenu(anchorEl) { openDropdown(anchorEl, toolsMenuRows(), { align: 'right' }); }
 function toolsBtn() {
-  return `<button class="iconbtn js-tools-menu" data-tip="Tools — QR, previews, hotkeys, GPS fleet tools${devUnlocked() ? ', dev tools' : ''}">${CARD_ICON.workOrders}</button>`;
+  const phone = document.body.classList.contains('is-phone');
+  const n = phone ? commsBellCount() : 0;   // phone folds the bell's alerts into Tools — badge the wrench so they still catch the eye
+  return `<button class="iconbtn js-tools-menu" data-tip="Tools${phone ? ' & alerts' : ''} — QR, previews, hotkeys, GPS fleet tools${devUnlocked() ? ', dev tools' : ''}">${CARD_ICON.workOrders}${n ? `<span class="bb-badge">${n > 9 ? '9+' : n}</span>` : ''}</button>`;
 }
 /** Comms bell — Requests, Transport alerts, and Notifications, one direct-jump
  *  row each with its own count; badges roll up onto the bell itself. (Chat and
@@ -10284,10 +10295,8 @@ function wrChatResolved(c) {
   return filed.length > 0 && filed.every((n) => !wranglerRequests.some((rq) => rq.number === n));
 }
 // §M1 — phone-only per-column bottom strip: Yard→internal chat · Rentals→tool bar · Customers→external chats (shell).
-// §M1 — the card the phone is currently showing (the active column's member). Also what the
-// grid swipe folds through mainCardOfMember() — it's the same "what am I on" state regardless
-// of whether the swipe started in the footer or the grid (2026-07-10: activeMobileCard(), a
-// byte-identical twin used only by the old grid Back/Fwd swipe, was removed as dead code).
+// §M1/§M8 — the card the phone is currently showing (the active column's member). The §M8 swipe
+// rail reuses this as "what am I on": mobileRailIndex() snaps the track to this card's rail slot.
 function currentMobileMember() {
   const colObj = COLUMNS[Math.max(0, Math.min(2, state.mobileCol))];
   const s = activeSession();
@@ -10303,15 +10312,30 @@ const MOBILE_TOGGLE_GROUPS = [
   { col: 'middle', members: ['rentals', 'calendar'] },
   { col: 'right',  members: ['customers', 'sales'] },
 ];
-// §M1/§M3 — the FULL ordered swipe sequence, incl. sub-cards, derived (never hardcoded)
-// from MOBILE_TOGGLE_GROUPS so it stays correct if that list ever changes: left-to-right,
-// main-then-sub per column → ['units','categories','rentals','calendar','customers','sales'].
-// This is what a FOOTER swipe steps through (Jac, 2026-07-10 refinement — swiping the dock
-// should reach the ACTUAL next card, subs included, not just the 3 mains).
-const MOBILE_SWIPE_ORDER = MOBILE_TOGGLE_GROUPS.flatMap((g) => g.members);
-// The 3 MAIN cards, left→right — what a swipe ANYWHERE ELSE (grid/list/detail) steps between
-// (never a sub-card); the footer swipe uses MOBILE_SWIPE_ORDER above instead.
-const MAIN_CARDS = ['units', 'rentals', 'customers'];
+// §M8 (Jac 2026-07-18) — the phone SWIPE RAIL supersedes the old 3-column swipe: a single
+// left→right ribbon of 5 cards — Categories · Units · Rentals · Customers · Sales — so a swipe
+// steps card-by-card across the whole ribbon instead of column-by-column (one more swipe past
+// Units reaches Categories; one more past Customers reaches Sales). Calendar (the Office
+// Dispatch / Driver grid) is the ONE card OFF the rail: tapping its chip swaps it into the CENTER
+// slot in place of Rentals, so it's reachable but never a swipe stop. Spatial, not per-column:
+// the LEFT column's two cards take the two LEFT slots (sub Categories outboard of main Units),
+// the RIGHT column's two take the two RIGHT slots (main Customers then sub Sales), the middle
+// contributes only Rentals (or the swapped-in Calendar). state.mobileCol stays the COLUMN index
+// (0–2) that every downstream reader (zip-zones, cross-column links, the footer jog, cross-device
+// session sync) is keyed to — it's DERIVED from the snapped rail card.
+const MOBILE_RAIL = ['categories', 'units', 'rentals', 'customers', 'sales'];
+// The live rail members for a session — the center slot follows the middle column's active member
+// so a tapped Calendar shows there (off-rail swap-in-place) instead of Rentals.
+function mobileRailMembers(session) {
+  const mid = (session && session.cols && session.cols.middle) || 'rentals';
+  return MOBILE_RAIL.map((m) => (m === 'rentals' ? mid : m));
+}
+// Rail index (0–4) to snap the track to for the card currently on screen (= the active member of
+// the active column, via currentMobileMember); 0 if that card is somehow off the rail.
+function mobileRailIndex(session) {
+  const i = mobileRailMembers(session).indexOf(currentMobileMember());
+  return i < 0 ? 0 : i;
+}
 // Which main card a member (incl. a sub-card) belongs to.
 function mainCardOfMember(m) {
   const col = COLUMN_OF[m];
@@ -10332,11 +10356,9 @@ function goToCard(member) {
 // card the user is currently ON expands to icon + stamped label — every other icon, in
 // every group, stays icon-only (keeps 3 narrow toggles from fighting each other for label
 // width). Tap an icon to jump straight to that card's list. The card's search/sort row is
-// moved DOWN into .mdock-searchslot by render(). Swipe the dock left/right to step through
-// the FULL MOBILE_SWIPE_ORDER sequence incl. sub-cards; a swipe anywhere ELSE (the grid) instead
-// steps through the 3 MAIN cards only (2026-07-10 refinement — two different swipe zones, see
-// the pointerup handler in boot(); swipe Back/Forward through history stays retired, the jog
-// buttons cover that).
+// moved DOWN into .mdock-searchslot by render(). Swiping now steps through the §M8 5-card SWIPE
+// RAIL (Categories·Units·Rentals·Customers·Sales — MOBILE_RAIL); swipe Back/Forward through
+// history stays retired, the jog buttons cover that.
 // §M7 — the phone footer is a THREE-column switcher/indicator (one button per desktop column:
 // Units · Rentals · Customers), each showing that column's current member icon+label. Tap a
 // button → smooth scroll-snaps the track to that column (the [data-mcol] handler in onClick);
@@ -10359,11 +10381,38 @@ function footerJogInner() {
   const cs = s.cards ? s.cards[member] : null;
   return cardJog(member, cs, { always: true });
 }
+// §M7 (Jac 2026-07-17) — the phone comms row: three BIG floating tiles (Team · Customers ·
+// Mr. Wrangler), each labeled + wearing its worst-status dot. Reuses .js-comms-chip so the same
+// click funnel fires (Customer → the channel menu). The icon-only chips stay a desktop idiom.
+function commsTilesHtml() {
+  const tile = (cat) => {
+    const meta = COMMS_CAT_META[cat];
+    const on = cat === 'customer' ? commsCustActive() : state.commsRail.cat === cat;   // phone routes all three through the rail
+    const worst = cat === 'customer' ? commsCustWorst() : commsCatWorst(cat);
+    const label = cat === 'customer' ? 'Customers' : (cat === 'wrangler' ? 'Mr. Wrangler' : meta.label);
+    // icon-only tiles (Jac 2026-07-17) — labels dropped so the glyph fills the chip; aria-label carries the name
+    return `<button class="mtile js-comms-chip${on ? ' on' : ''}" data-cat="${cat}" aria-pressed="${on}" aria-label="${esc(label)}" data-tip="${esc(meta.tip)}">`
+      + `${worst ? `<span class="mtile-dot c-${worst}" aria-hidden="true"></span>` : ''}`
+      + `<span class="mtile-ico">${meta.icon()}</span></button>`;
+  };
+  return `<div class="mfoot-comms" role="group" aria-label="Comms — Team, Customers, Mr. Wrangler">${COMMS_CHIP_CATS.map(tile).join('')}</div>`;
+}
+// §M7 — the phone FOOTER: a floating, backdrop-less comms band. Three big comms tiles fill the
+// left; the Back/Forward jog rides top-right with Receipt · Tools · notifications tucked under it
+// (all icon-only, same size). The merged Customer menu floats above the band when summoned.
 function mobileToolbarEl() {
   const d = el('div', 'mobile-toolbar');
-  // The jog is a SIBLING of the (horizontally-scrollable) tool row, pinned to the bottom-RIGHT
-  // so it can never scroll off-screen; the tools scroll in the space to its left.
-  d.innerHTML = `<div class="top-toolbar">${bottomBarInner()}${commsBellBtn()}</div><div class="mfoot-jog">${footerJogInner()}</div>`;
+  // Jac 2026-07-17: bell dropped — its Requests/Transports/Notifications fold into the Tools menu
+  // (count badged on the wrench). Jog owns the top row (double-wide now Receipt+Tools share the row).
+  // Comms open FULL-SCREEN (mountMobileComms) — no inline menu rides the footer anymore.
+  d.innerHTML = commsTilesHtml()
+    + `<div class="mfoot-utils">`
+    +   `<div class="mfoot-jog">${footerJogInner()}</div>`
+    +   `<div class="mfoot-urow">`
+    +     `<button class="iconbtn js-newitem" data-new="receipt" aria-label="New receipt" data-tip="New receipt">${CARD_ICON.expenses}</button>`
+    +     toolsBtn()
+    +   `</div>`
+    + `</div>`;
   return d;
 }
 /* ════════════════════════════════════════════════════════════════════════
@@ -10445,11 +10494,10 @@ function openChat(id, msg) {
   chatShow(); render();
   if (msg) toast(msg);
 }
-/* D9 — the ONE way to surface the active team chat: phones keep the bottom-sheet dock;
-   desktop lands it on the comms rail as the Team session's SINGLE open window
-   (single-open law — summoning it closes whatever window was up). */
+/* D9 — the ONE way to surface the active team chat: it lands on the comms rail as the Team
+   session's SINGLE open window (single-open law). Desktop floats it above the rail; phone
+   renders that same rail state FULL-SCREEN (mountMobileComms) — no more bottom-sheet dock. */
 function chatShow() {
-  if (document.body.classList.contains('is-phone')) { state.chat.open = true; return; }
   const id = state.chat.activeId; if (!id) return;
   commsUnend(id, 'team');                           // any open resurrects an ended chat
   const rail = state.commsRail;
@@ -10982,17 +11030,16 @@ function openWranglerDock(opts) {
   if (opts.reqNumber !== undefined) w.reqNumber = opts.reqNumber;
   if (opts.reqTitle !== undefined) w.reqTitle = opts.reqTitle;
   if (opts.reqUrl !== undefined) w.reqUrl = opts.reqUrl;
-  // D9 — desktop has no floating dock anymore: the conversation lands on the comms
-  // rail as the Mr. Wrangler session's SINGLE open window (single-open law).
-  if (!document.body.classList.contains('is-phone')) {
-    const rail = state.commsRail;
-    if (rail.cat !== 'wrangler') { commsLeaveCat(rail.cat); rail.cat = 'wrangler'; }
-    const s = rail.sessions.wrangler;
-    s.lastOpen = String(w.id); s.menuOpen = false;
-    s.hidden = (s.hidden || []).filter((x) => String(x) !== String(w.id));
-    commsUnend(w.id, 'wrangler');                    // any open resurrects an ended chat
-    saveCommsRail();
-  }
+  // The conversation lands on the comms rail as the Mr. Wrangler session's SINGLE open window
+  // (single-open law) — desktop floats it, phone renders that SAME rail state full-screen
+  // (mountMobileComms reads sessions.wrangler.lastOpen), so this sync must run on both.
+  const rail = state.commsRail;
+  if (rail.cat !== 'wrangler') { commsLeaveCat(rail.cat); rail.cat = 'wrangler'; }
+  const s = rail.sessions.wrangler;
+  s.lastOpen = String(w.id); s.menuOpen = false;
+  s.hidden = (s.hidden || []).filter((x) => String(x) !== String(w.id));
+  commsUnend(w.id, 'wrangler');                    // any open resurrects an ended chat
+  saveCommsRail();
   render();
   setTimeout(() => { const i = document.querySelector('.wrangler-dock .js-wr-in'); if (i) i.focus(); const f = document.querySelector('.wrangler-dock .wr-feed'); if (f) f.scrollTop = f.scrollHeight; }, 0);
 }
@@ -12861,12 +12908,17 @@ function wirePopupDrag(overlay) {
    stack stays balanced. Phone-only — desktop keeps Esc/click. Wired in boot(). ── */
 let backGuard = false, backConsuming = false;
 let swipeFired = false;   // §M1/§M3 — a footer or grid section-switch swipe sets this so the trailing click is swallowed once
-function anyDismissable() { return !!(state.overlay || state.datesearch || state.chat.open || state.wrangler.open); }
+function anyDismissable() { return !!(state.overlay || state.datesearch || state.chat.open || state.wrangler.open || (document.body.classList.contains('is-phone') && state.commsRail.cat)); }
 function dismissTopSheet() {
   if (state.datesearch) { closeDateSearch(); return true; }
   if (overlayLocked()) { attnFlash('.rr-stars'); toast('Rate the return first — it can’t be skipped.'); return true; }   // required modal: refuse Esc/back
   if (state.overlay) { closeOverlay(); return true; }
-  if (state.wrangler.open) { wranglerRailSnapshot(); state.wrangler.open = false; render(); return true; }   // mirror js-wr-close
+  if (document.body.classList.contains('is-phone') && state.commsRail.cat) {   // phone full-screen comms: a thread backs to its inbox, the inbox closes the surface
+    const s = commsSess();
+    if (s && s.lastOpen != null) { s.lastOpen = null; s.menuOpen = true; saveCommsRail(); render(); return true; }
+    commsLeaveCat(state.commsRail.cat); state.commsRail.cat = null; if (s) s.menuOpen = false; saveCommsRail(); render(); return true;
+  }
+  if (state.wrangler.open) { wranglerRailSnapshot(); state.wrangler.open = false; render(); return true; }   // mirror js-wr-close (desktop)
   if (state.chat.open) { state.chat.open = false; render(); return true; }                                    // mirror js-chat-close
   return false;
 }
@@ -16250,6 +16302,66 @@ function openSignatureWindow(title, custId) {
       fit();})();<\/script></body></html>`);
   w.document.close();
 }
+/* Mobile signature SHEET — the phone alternative to openSignatureWindow. A phone has one
+   screen, so "pop out to a 2nd screen" is meaningless; the window rendered as a full tab
+   whose Clear/close controls fell off-screen (Jac: "no way to close"). Here the pad is an
+   in-app bottom sheet covering ~half the viewport that dismisses by tapping the blank space
+   above it (no ✕). Strokes save on every pen-rest (mirroring onSigMessage's targets) so a
+   tap-away keeps the signature. Lives on document.body so a render()/renderOverlay() behind
+   it can't wipe it mid-signing. */
+let _sigSheet = null;
+function teardownSigSheet() {
+  if (!_sigSheet) return null;
+  const ref = _sigSheet; _sigSheet = null;
+  try { ref.backdrop.remove(); ref.sheet.remove(); } catch (e) {}
+  document.body.classList.remove('sig-sheet-open');
+  document.removeEventListener('keydown', ref.onKey, true);
+  return ref;
+}
+function closeMobileSignSheet() {
+  const ref = teardownSigSheet(); if (!ref) return;
+  if (ref.overlay && state.overlay) renderOverlay();   // reflect the saved signature on the packet behind
+  else if (ref.custId) render();
+}
+function openMobileSignSheet(title, custId) {
+  teardownSigSheet();                                  // never stack two
+  const o = state.overlay || null;
+  const c = custId ? IDX.customer.get(custId) : null;
+  const t = esc(title || 'Rental Account Agreement');
+  const backdrop = el('div', 'sig-sheet-backdrop');
+  const sheet = el('div', 'sig-sheet',
+    `<div class="sig-sheet-grip" aria-hidden="true"></div>
+     <div class="sig-sheet-cap">Sign here — <b>${t}</b></div>
+     <canvas class="sig-sheet-pad"></canvas>
+     <div class="sig-sheet-foot">${ghostPill('Clear', { js: 'js-sig-sheet-clear' })}</div>`);
+  document.body.appendChild(backdrop); document.body.appendChild(sheet);
+  document.body.classList.add('sig-sheet-open');
+  const cv = sheet.querySelector('.sig-sheet-pad'), ctx = cv.getContext('2d');
+  const ink = (getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#ff7a1a').trim();
+  const fit = () => { const r = cv.getBoundingClientRect(); cv.width = Math.round(r.width); cv.height = Math.round(r.height);
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height); ctx.strokeStyle = ink; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; };
+  // re-apply a signature already captured (re-open) so it isn't lost — same source as setupSignaturePad
+  let cur = '';
+  if (o) { const cc = captureCtx(o); cur = cc.k ? ((cardDraftSig(cc.k) || {}).signature || '') : ((cc.c && cc.c.pendingCapture && cc.c.pendingCapture.signature) || ''); }
+  else if (c) { cur = agDraft(c).signature || ''; }
+  requestAnimationFrame(() => { fit(); if (cur) { const im = new Image(); im.onload = () => { ctx.drawImage(im, 0, 0, cv.width, cv.height); cv.dataset.drawn = '1'; }; im.src = cur; } });
+  const save = () => { const dataURL = cv.toDataURL('image/jpeg', 0.8);
+    if (o) { captureSignature(o, dataURL); scheduleFinalizeSign(o); } else if (c) { agDraft(c).signature = dataURL; } };
+  let drawing = false, last = null;
+  const pos = (e) => { const b = cv.getBoundingClientRect(); return { x: (e.clientX - b.left) * (cv.width / b.width), y: (e.clientY - b.top) * (cv.height / b.height) }; };
+  cv.addEventListener('pointerdown', (e) => { e.preventDefault(); drawing = true; last = pos(e); cv.dataset.drawn = '1'; try { cv.setPointerCapture(e.pointerId); } catch (_) {} });
+  cv.addEventListener('pointermove', (e) => { if (!drawing) return; e.preventDefault(); const p = pos(e);
+    ctx.lineWidth = (e.pointerType === 'pen' && e.pressure > 0) ? (1.4 + e.pressure * 2.6) : 2.4; ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; });
+  const up = () => { if (drawing) { drawing = false; save(); } };
+  cv.addEventListener('pointerup', up); cv.addEventListener('pointerleave', up);
+  sheet.querySelector('.js-sig-sheet-clear').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation();
+    fit(); cv.dataset.drawn = ''; if (o) clearCaptureSignature(o); else if (c) agDraft(c).signature = ''; haptic(10); });
+  sheet.addEventListener('pointerdown', (e) => e.stopPropagation());   // taps ON the sheet never reach the app behind (only the backdrop closes)
+  backdrop.addEventListener('pointerdown', (e) => { e.preventDefault(); closeMobileSignSheet(); });   // tap the blank space above = dismiss (no ✕)
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeMobileSignSheet(); } };
+  document.addEventListener('keydown', onKey, true);
+  _sigSheet = { backdrop, sheet, overlay: o, custId: custId || null, onKey };
+}
 // Wire the signature canvas for finger/stylus/mouse/pen drawing (white bg → JPEG export).
 function setupSignaturePad() {
   // Wire EVERY pad in the overlay (the capture can ride the card signing tab and/or
@@ -16274,7 +16386,7 @@ function setupSignaturePad() {
     cv.addEventListener('pointerleave', stash);
   });
 }
-const closeOverlay = () => { destroyCardElement(); stopAgCam(); try { if (_sigWin && !_sigWin.closed) _sigWin.close(); } catch (e) {} _sigWin = null; clearTimeout(_gpsPollTimer); state.datepick = null; state.overlay = null; renderOverlay(); };
+const closeOverlay = () => { destroyCardElement(); stopAgCam(); teardownSigSheet(); try { if (_sigWin && !_sigWin.closed) _sigWin.close(); } catch (e) {} _sigWin = null; clearTimeout(_gpsPollTimer); state.datepick = null; state.overlay = null; renderOverlay(); };
 
 /* ── Back-office boards (§7.9–7.12): spreadsheet-style tables ─────────────── */
 function vendorTotals(vendorId) {
@@ -16891,12 +17003,15 @@ function render() {
   // scroll position (see the scrollend sync wired in boot()).
   const phone = document.body.classList.contains('is-phone');
   const grid = el('div', 'grid');
-  for (const col of COLUMNS) grid.appendChild(columnEl(col, session));
+  // §M8 — phone paints the 5-card SWIPE RAIL (Categories·Units·Rentals·Customers·Sales, with
+  // Calendar swapped into the center slot when active); desktop/tablet paint the 3 columns.
+  if (phone) for (const m of mobileRailMembers(session)) grid.appendChild(mobileRailPanelEl(m, session));
+  else for (const col of COLUMNS) grid.appendChild(columnEl(col, session));
   if (phone) {
     $('#app').replaceChildren(header, grid, mobileToolbarEl());
-    // Snap the track to the active column with NO animation (a state-driven column change must
-    // land instantly, not glide). rAF so the flex track has laid out and offsetLeft is real.
-    const target = Math.max(0, Math.min(COLUMNS.length - 1, state.mobileCol));
+    // Snap the track to the card on screen with NO animation (a state-driven change must land
+    // instantly, not glide). rAF so the flex track has laid out and offsetLeft is real.
+    const target = mobileRailIndex(session);
     requestAnimationFrame(() => { const c = grid.children[target]; if (c) grid.scrollLeft = c.offsetLeft; });
   } else {
     $('#app').replaceChildren(header, grid, bottomBarEl());
@@ -16920,14 +17035,13 @@ function render() {
     if (!phone) positionDateSearch(fl);
   }
   // §M3 — lock the column scroll behind any open sheet/overlay/dock on phones
-  document.body.classList.toggle('sheet-open', !!(state.overlay || state.datesearch || state.chat.open || (state.wrangler.open && !state.wrangler.min)));   // a MINIMIZED Wrangler dock is a slim in-flow bar — it must NOT lock the page scroll (Jac, mobile)
+  document.body.classList.toggle('sheet-open', !!(state.overlay || state.datesearch || state.chat.open || (state.wrangler.open && !state.wrangler.min) || (document.body.classList.contains('is-phone') && state.commsRail.cat)));   // a MINIMIZED Wrangler dock is a slim in-flow bar — it must NOT lock the page scroll (Jac, mobile); a phone full-screen comms surface DOES lock the card behind it
   syncBackGuard();   // §M3 — keep the Android back-button guard in step with what's open
   // §17/§18 — the team + wrangler DOCKS are PHONE-only bottom sheets now (D9): desktop
   // retired both surfaces onto the comms rail (their machinery is shared, not the shell).
-  const _phoneDocks = document.body.classList.contains('is-phone');
-  if (_phoneDocks && state.chat.open) { const d = el('div', 'chat-dock', ''); d.dataset.drop = 'chat'; d.innerHTML = chatDockEl(); $('#app').appendChild(d); }
-  if (_phoneDocks && state.wrangler.open) { const d = el('div', 'wrangler-dock' + (state.chat.open ? ' wr-beside-chat' : '') + (state.wrangler.min ? ' wr-min' : '')); d.innerHTML = wranglerDockEl(); $('#app').appendChild(d); }
-  mountCommsPops();   // D8/D9 comms rail — the session's single open window floats above its own tab
+  // Phone comms is FULL-SCREEN now (mountMobileComms); the old phone-only chat/wrangler bottom-sheet docks are retired.
+  mountCommsPops();   // D8/D9 comms rail — desktop: the session's single open window floats above its own tab
+  mountMobileComms(); // D8/D9 comms — phone: the summoned category renders FULL-SCREEN (Messenger-style)
   // §18e/§17 — the bell + Requests inbox now live in the bottom comms band (bb-utils),
   // always visible; the docks float above it. (The old floating fab-stack is retired.)
   mountTransportEditor();   // inline transport editor: mount the live map + wire the address field
@@ -18097,7 +18211,9 @@ function onClick(e) {
   if (closest('.js-ncsign-pdf')) { e.stopPropagation(); const b = closest('.js-ncsign-pdf'); return openSignedPdf(state.overlay.editId, b.dataset.card, b.dataset.sig); }
   if (closest('.js-nc-selfie-clear')) { e.stopPropagation(); ncSyncInputs(); state.overlay.draft.selfie = ''; renderOverlay(); return; }
   if (closest('.js-nc-sig-clearpad')) { e.stopPropagation(); const o = state.overlay; if (o) clearCaptureSignature(o); const cv = document.querySelector('.overlay .nc-sigpad'); if (cv) { const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height); cv.dataset.drawn = ''; } return; }
-  if (closest('.js-sign-popout')) { e.preventDefault(); e.stopPropagation(); const b = closest('.js-sign-popout'); openSignatureWindow(b.dataset.title, b.dataset.rec || null); return; }
+  if (closest('.js-sign-popout')) { e.preventDefault(); e.stopPropagation(); const b = closest('.js-sign-popout');
+    if (document.body.classList.contains('is-phone')) openMobileSignSheet(b.dataset.title, b.dataset.rec || null);   // §M — phone: in-app half-height sheet, not a 2nd-screen window
+    else openSignatureWindow(b.dataset.title, b.dataset.rec || null); return; }
   if (closest('.js-ag-selfie')) {   // selfie tile: one-tap snap off the live feed; Retake clears it; no camera → native picker
     const o = state.overlay; if (!o) return;
     const tile = closest('.js-ag-selfie');
@@ -18471,14 +18587,14 @@ function onClick(e) {
     return;
   }
   if (closest('.js-mtools')) { e.stopPropagation(); return openOverlay({ kind: 'tools' }); }   // §M1 phone footer → the global tool tray as a sheet
-  if (closest('[data-gocard]')) {   // §M7 — a column-header toggle: zip to that card. If it's already the card shown in its column, smooth-scroll the snap track there (the nice "zip"); if it switches a sub-card, goToCard re-renders + lands on it.
+  if (closest('[data-gocard]')) {   // §M8 — a toggle chip: zip to that card. If it's already the card shown in its column, smooth-scroll the rail to its panel (the nice "zip"); otherwise goToCard re-renders + lands on it (a sub-card swap, incl. the off-rail Calendar into the center slot).
     e.stopPropagation();
     const member = closest('[data-gocard]').dataset.gocard, col = COLUMN_OF[member];
-    const i = COLUMNS.findIndex((c) => c.id === col);
     const s = activeSession(); const grid = document.querySelector('#app > .grid');
-    if (grid && i >= 0 && s.cols && s.cols[col] === member && grid.children[i]) {
-      state.mobileCol = i;
-      grid.scrollTo({ left: grid.children[i].offsetLeft, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    const railIdx = grid ? mobileRailMembers(s).indexOf(member) : -1;
+    if (grid && railIdx >= 0 && s.cols && s.cols[col] === member && grid.children[railIdx]) {
+      const ci = COLUMNS.findIndex((c) => c.id === col); if (ci >= 0) state.mobileCol = ci;
+      grid.scrollTo({ left: grid.children[railIdx].offsetLeft, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
       return;
     }
     return goToCard(member);
@@ -18497,10 +18613,12 @@ function onClick(e) {
   if (closest('.js-chat-end')) { e.stopPropagation(); closeMenus(); return commsEndConv(closest('.js-chat-end').dataset.chat, 'team'); }   // admin ends the chat (phone-safe: cat pinned)
   if (closest('[data-chat-member]')) { e.stopPropagation(); return chatToggleMember(closest('[data-chat-member]').dataset.chatMember); }
   // D8/D9 THE COMMS RAIL — toolbar chips · session tabs · the single window · ALL menu
-  if (closest('.js-comms-chip')) { e.stopPropagation(); return commsToggleCat(closest('.js-comms-chip').dataset.cat); }
+  if (closest('.js-comms-chip')) { e.stopPropagation(); const cat = closest('.js-comms-chip').dataset.cat; return cat === 'customer' ? commsToggleCustomer() : commsToggleCat(cat); }
+  if (closest('.js-comms-ch')) { e.stopPropagation(); const ch = closest('.js-comms-ch').dataset.ch; setCommsCustCh(ch); return commsSummonChannel(ch); }
   if (closest('.js-comms-new')) { e.stopPropagation(); return commsNewChat(); }   // D9 ALL menu: + New chat (team → newChat(), wrangler → wranglerNewChat())
   if (closest('[data-comms-hide]')) { e.stopPropagation(); return commsHideTab(closest('[data-comms-hide]').dataset.commsHide); }   // ✕ hides from the rail only — never ends
-  if (closest('.js-comms-menu-x')) { e.stopPropagation(); const s = commsSess(); if (s) { s.menuOpen = false; saveCommsRail(); } return render(); }
+  if (closest('.js-comms-menu-x')) { e.stopPropagation(); const s = commsSess(); if (s) s.menuOpen = false; if (document.body.classList.contains('is-phone')) { commsLeaveCat(state.commsRail.cat); state.commsRail.cat = null; } saveCommsRail(); return render(); }
+  if (closest('.js-mcomms-back')) { e.stopPropagation(); const s = commsSess(); if (s) { s.lastOpen = null; s.menuOpen = true; } saveCommsRail(); return render(); }
   if (closest('[data-comms-tab]')) { e.stopPropagation(); commsOpenPt = { x: e.clientX }; return commsToggleTab(closest('[data-comms-tab]').dataset.commsTab); }
   if (closest('.js-comms-end')) { e.stopPropagation(); closeMenus(); return commsEndConv(closest('.js-comms-end').dataset.cust); }
   if (closest('.js-comms-mend')) { e.stopPropagation(); return commsEndConv(closest('.js-comms-mend').dataset.cust); }
@@ -24671,6 +24789,26 @@ function flushUserPrefs(section) {
   else ['prefs', 'views', 'dispatch', 'comms', 'session'].forEach((s) => { _userPrefsDirty[s] = true; });
   clearTimeout(_userPrefsTimer); _userPrefsTimer = setTimeout(pushUserPrefs, 1200);
 }
+// Flush any pending debounced change on tab-background/close (visibilitychange/pagehide) so an edit
+// made in the last ~1.2s isn't dropped by the debounce. Uses navigator.sendBeacon — a plain fetch
+// started during unload is aborted before it's sent; a beacon is queued by the browser and survives
+// the close. Mirrors backendCall's payload (sessionToken carries the auth). Best-effort, no response.
+function flushUserPrefsNow() {
+  try { clearTimeout(_userPrefsTimer); } catch (e) {}
+  if (!syncOn() || !state.userPrefs) return;
+  const dirty = _userPrefsDirty; const doc = {}; let any = false;
+  Object.keys(dirty).forEach((s) => { if (dirty[s] && state.userPrefs[s] !== undefined) { doc[s] = state.userPrefs[s]; any = true; } });
+  if (!any) return;
+  doc.v = state.userPrefs.v || 1; _userPrefsDirty = {};
+  try {
+    let queued = false;
+    if (navigator.sendBeacon) {
+      const payload = JSON.stringify({ action: 'setUserPrefs', password: backendPassword, sessionToken: backendPassword, doc });
+      queued = navigator.sendBeacon(BACKEND_URL, new Blob([payload], { type: 'text/plain;charset=utf-8' }));   // false = payload over the ~64KB / pending-queue limit
+    }
+    if (!queued) { Object.keys(doc).forEach((s) => { if (s !== 'v') _userPrefsDirty[s] = true; }); pushUserPrefs(); }   // no beacon OR beacon rejected → best-effort fetch, re-mark dirty
+  } catch (e) { /* best-effort — the change also re-flushes on the next edit */ }
+}
 async function pushUserPrefs() {
   if (!syncOn() || !state.userPrefs) return;
   const dirty = _userPrefsDirty; _userPrefsDirty = {};
@@ -24681,10 +24819,6 @@ async function pushUserPrefs() {
   try { const r = await backendCall('setUserPrefs', { doc }); if (!r || !r.ok) Object.keys(doc).forEach((s) => { if (s !== 'v') _userPrefsDirty[s] = true; }); }
   catch (e) { Object.keys(doc).forEach((s) => { if (s !== 'v') _userPrefsDirty[s] = true; }); }   // offline → retry on the next change
 }
-// Immediate flush — cancel the 1.2s debounce and push any pending dirty sections RIGHT NOW, so
-// a change made inside the debounce window isn't lost when the session ends (logout / switch-
-// user / tab hidden or closed). Fire-and-forget; the payload's token is captured synchronously.
-function flushUserPrefsNow() { if (!syncOn() || !state.userPrefs) return; clearTimeout(_userPrefsTimer); pushUserPrefs(); }
 // Boot (finishLoad, once personId is known): server doc BEATS stale localStorage; an empty
 // server doc means first-ever sync → adopt this device's mirror as the person's baseline.
 async function loadUserPrefs(_try) {
@@ -24694,6 +24828,9 @@ async function loadUserPrefs(_try) {
     const r = await backendCall('getUserPrefs');
     if (r && r.ok && r.doc && typeof r.doc === 'object' && Object.keys(r.doc).length) hydrateUserPrefs(r.doc);
     else seedUserPrefsFromLocal();                                   // no row yet → seed baseline from this device
+    // Announce the cutover ONCE per device: existing device-local prefs/saved-views can reset when
+    // sync turns on (a shared-device wipe leaves no server copy to restore) — nudge re-saving a view.
+    try { if (state.userPrefs && !localStorage.getItem('jactec.syncWelcomed')) { localStorage.setItem('jactec.syncWelcomed', '1'); toast('Cross-device sync is on — your settings now follow you across your devices. If a saved view is missing, just re-save it.'); } } catch (e) {}
   } catch (e) {
     // A transient blip at login must NOT disable sync for the whole session (state.userPrefs
     // would stay null and every stamp would silently no-op). Retry with backoff while still
@@ -25898,12 +26035,20 @@ function boot() {
     const grid = document.querySelector('#app > .grid');
     if (!grid || !document.body.classList.contains('is-phone')) return;
     const w = grid.clientWidth || 1;
-    const idx = Math.max(0, Math.min(COLUMNS.length - 1, Math.round(grid.scrollLeft / w)));
-    if (idx === mcolLast) return;
-    mcolLast = idx; state.mobileCol = idx;
-    upSyncSession();   // §cross-device-sync — remember the top-level column (resume where you left off)
-    // Each column's own toggle header highlights that column's card statically. The footer jog
-    // (R32), though, is a GLOBAL bar reflecting the ACTIVE card, so repaint it on column change.
+    const session = activeSession();
+    const members = mobileRailMembers(session);
+    // §M8 — the track is the 5-card rail; read the snapped RAIL index (0–4) and fold it back to
+    // the COLUMN index (0–2) that everything downstream is keyed to. The active member of that
+    // column follows the swipe, so landing on Categories/Units/Customers/Sales updates cols[] —
+    // the chip highlight, cross-column links, the footer jog, and session sync all stay honest.
+    const railIdx = Math.max(0, Math.min(members.length - 1, Math.round(grid.scrollLeft / w)));
+    if (railIdx === mcolLast) return;
+    mcolLast = railIdx;
+    const member = members[railIdx], col = COLUMN_OF[member], colIdx = COLUMNS.findIndex((c) => c.id === col);
+    if (colIdx >= 0) state.mobileCol = colIdx;
+    if (session.cols && col) session.cols[col] = member;
+    upSyncSession();   // §cross-device-sync — remember where you left off (resume there)
+    // The footer jog (R32) is a GLOBAL bar reflecting the ACTIVE card, so repaint it on any step.
     const fj = document.querySelector('.mobile-toolbar .mfoot-jog');
     if (fj) fj.innerHTML = footerJogInner();
   }
@@ -25922,7 +26067,7 @@ function boot() {
   // menu itself and the comms chip that hosts it, so the chip's own click toggles instead of double-firing.
   document.addEventListener('mousedown', (e) => {
     const s = commsSess(); if (!s || !s.menuOpen) return;
-    if (e.target.closest && e.target.closest('.comms-pop.comms-menu, .js-comms-chip')) return;
+    if (e.target.closest && e.target.closest('.comms-pop.comms-menu, .mcomms, .js-comms-chip')) return;   // .mcomms = phone full-screen comms; taps inside it must never self-dismiss (it IS the menu)
     s.menuOpen = false; saveCommsRail(); render();
   });
   document.addEventListener('input', onInput);
@@ -26332,7 +26477,7 @@ function exposeTestApi() {
       adoptScanCaptures, setScanCaps: (m) => { SCAN_CAPS = m || {}; },   // §scan-reconcile — test seam: seed SCAN_CAPS then run adoption (logic-test)
       autoRunRepair, autoRunAnchorsFor, secToClock, AUTORUN_DAY_START_SEC, AUTORUN_EOD_DEADLINE_SEC, AUTORUN_LOAD_BUFFER_SEC, dispatchPinOf,
       openCustomerForm, renderOverlay, render, printInvoice, invoiceDocHtml, renderInvoicePng, invoiceSheetPng, invoicePrintGroups, invoiceAmendments, cardComplete, cardCaptureState, cardHasSelfie, cardHasSignature, captureSelfie, captureSignature,
-      wranglerSend, wranglerNewChat, openWranglerDock, wranglerDockPollTick, devUnlocked, openWranglerOps, wrOpsAgo, __state: state };   // UI drivers for headless screenshot/e2e tests
+      wranglerSend, wranglerNewChat, openWranglerDock, wranglerDockPollTick, devUnlocked, openWranglerOps, wrOpsAgo, openMobileSignSheet, closeMobileSignSheet, agDraft, __state: state };   // UI drivers for headless screenshot/e2e tests
 
   } catch (e) { /* no window (non-browser) */ }
 }
@@ -26466,6 +26611,10 @@ const COMMS_CAT_META = {
   team:     { label: 'Team',        icon: () => I.users,         channel: null,    tip: 'Team — the shop-floor chat' },
   text:     { label: 'Texts',       icon: () => I.messageSquare, channel: 'sms',   tip: 'Texts — customer SMS threads' },
   email:    { label: 'Email',       icon: () => I.mail,          channel: 'email', tip: 'Email — customer email threads' },
+  // D8 merged Customer chip — one button for texts + emails; the channel toggle lives in its
+  // menu. icon() follows the current channel (commsCustCh). Never used as a rail `cat` — the chip
+  // delegates to the real 'text'/'email' cats via commsToggleCustomer/commsSummonChannel.
+  customer: { label: 'Customers',   icon: () => (commsCustCh === 'email' ? I.mail : I.messageSquare), channel: null, tip: 'Customers — texts & emails in one place (toggle inside)' },
   wrangler: { label: 'Mr. Wrangler', icon: () => I.lasso,        channel: null,    tip: 'Mr. Wrangler — ask the yard AI, or report a bug' },
 };
 const commsOnline = () => typeof backendPassword !== 'undefined' && !!backendPassword;
@@ -26517,6 +26666,17 @@ function commsCatWorst(cat) {
   list.forEach((t) => { const s = commsConvStatus(t, COMMS_CAT_META[cat].channel); if (!worst || COMMS_ST_RANK[s] < COMMS_ST_RANK[worst]) worst = s; });
   return (!worst || worst === 'gray') ? 'green' : worst;   // nothing waiting = green (quiet line)
 }
+/* ── merged Customer chip (Jac 2026-07-17): Texts + Email collapse into ONE comms button;
+   a Text/Email toggle in its menu picks the channel. The underlying 'text'/'email' categories,
+   their sessions, threads and sends are UNCHANGED — this is a chip-row + menu presentation over
+   them. commsCustCh = which channel the merged chip currently wears (a per-device view pref). ── */
+const COMMS_CUSTCH_LS = 'jactec.commsCustCh';
+let commsCustCh = 'text';
+try { if (localStorage.getItem(COMMS_CUSTCH_LS) === 'email') commsCustCh = 'email'; } catch (e) {}
+const commsCustCat = () => (commsCustCh === 'email' ? 'email' : 'text');
+function setCommsCustCh(ch) { commsCustCh = ch === 'email' ? 'email' : 'text'; try { localStorage.setItem(COMMS_CUSTCH_LS, commsCustCh); } catch (e) {} }
+const commsCustActive = () => (state.commsRail.cat === 'text' || state.commsRail.cat === 'email');
+function commsCustWorst() { return [commsCatWorst('text'), commsCatWorst('email')].sort((a, b) => COMMS_ST_RANK[a] - COMMS_ST_RANK[b])[0]; }
 /* ── Team category (D9) — conversations derive from the APP-23 chat store ── */
 const commsChatLastAt = (c) => Math.max(0, ...(c.messages || []).map((m) => m.at || 0));
 function commsTeamChats() {   // every un-ended team chat, newest first (End resurrects on a newer message)
@@ -26595,18 +26755,17 @@ function commsAliasesEnsure() {     // lazy one-shot alias fetch for the email F
   commsAliasList().then((a) => { if (a && a.length) render(); });
 }
 /* ── the four toolbar chips (bottom-left, before the tool buttons) ────────── */
+const COMMS_CHIP_CATS = ['team', 'customer', 'wrangler'];   // D8 merged row — Texts+Email fold into 'customer'
 function commsChipsHtml() {
   const phone = document.body.classList.contains('is-phone');
   const chip = (cat) => {
     const meta = COMMS_CAT_META[cat];
-    // phones have no rail — the team/wrangler chips still bridge to their bottom-sheet docks there
-    const on = phone
-      ? (cat === 'team' ? state.chat.open : cat === 'wrangler' ? (state.wrangler.open && !state.wrangler.min) : state.commsRail.cat === cat)
-      : state.commsRail.cat === cat;
-    const worst = commsCatWorst(cat);
+    // 'customer' is on whenever a customer channel (text OR email) is summoned; its dot rolls up both.
+    const on = cat === 'customer' ? commsCustActive() : state.commsRail.cat === cat;
+    const worst = cat === 'customer' ? commsCustWorst() : commsCatWorst(cat);
     return `<button class="iconbtn comms-chip js-comms-chip${on ? ' on' : ''}" data-cat="${cat}" data-tip="${esc(meta.tip)}" aria-pressed="${on}">${meta.icon()}${worst ? `<span class="cc-dot c-${worst}" aria-hidden="true"></span>` : ''}</button>`;
   };
-  return `<span class="comms-chips" role="group" aria-label="Comms — Team, Texts, Email, Mr. Wrangler">${COMMS_CATS.map(chip).join('')}</span><span class="bb-sep bb-stitch" aria-hidden="true"></span>`;
+  return `<span class="comms-chips" role="group" aria-label="Comms — Team, Customers, Mr. Wrangler">${COMMS_CHIP_CATS.map(chip).join('')}</span><span class="bb-sep bb-stitch" aria-hidden="true"></span>`;
 }
 /* ── the summoned session's tabs on the rail (ALL first, then conversations).
    D9: one builder, four categories — a tab's is-active means "this is THE open
@@ -26699,9 +26858,11 @@ function commsWranglerPopupHtml() {
 }
 /* ── the ALL menu: every un-ended conversation, Open / End per row (D9: Team and
    Mr. Wrangler list their chats too, with a + New chat at the foot) ────────── */
-function commsMenuHtml(cat) {
+function commsMenuHtml(cat, opts = {}) {
   const meta = COMMS_CAT_META[cat];
-  const row = (id, name, st, snip) => `<div class="cm-row js-comms-mrow" data-cust="${esc(id)}" data-tip="Open"><span class="cp-dot c-${st}" aria-hidden="true"></span><span class="cm-who">${esc(name)}</span><span class="cm-snip">${esc(snip)}</span>${ghostPill('End', { js: 'js-comms-mend', data: { cust: id }, tip: cat === 'team' || cat === 'wrangler' ? 'End it — the history stays stored' : 'End it — the history stays on the profile' })}</div>`;
+  const row = (id, name, st, snip) => opts.readonly
+    ? `<div class="cm-row cm-ro"><span class="cp-dot c-${st}" aria-hidden="true"></span><span class="cm-who">${esc(name)}</span><span class="cm-snip">${esc(snip)}</span></div>`
+    : `<div class="cm-row js-comms-mrow" data-cust="${esc(id)}" data-tip="Open"><span class="cp-dot c-${st}" aria-hidden="true"></span><span class="cm-who">${esc(name)}</span><span class="cm-snip">${esc(snip)}</span>${ghostPill('End', { js: 'js-comms-mend', data: { cust: id }, tip: cat === 'team' || cat === 'wrangler' ? 'End it — the history stays stored' : 'End it — the history stays on the profile' })}</div>`;
   let rows = '', empty = 'Nothing on the line — right-click a customer to start one.', newRow = '';
   if (cat === 'team') {
     rows = commsTeamChats().map((c) => {
@@ -26725,8 +26886,16 @@ function commsMenuHtml(cat) {
       return row(id, (c && fullName(c)) || id, commsConvStatus(t, meta.channel), (ch.lastDirection === 'inbound' ? 'them: ' : 'you: ') + (ch.lastSnippet || ''));
     }).join('');
   }
+  const isCust = cat === 'text' || cat === 'email';
+  const chanToggle = isCust ? `<div class="comms-chan" role="tablist" aria-label="Channel — text or email">
+      <button class="comms-chan-b js-comms-ch${commsCustCh === 'text' ? ' on' : ''}" data-ch="text" role="tab" aria-selected="${commsCustCh === 'text'}">${I.messageSquare}<span>Text</span></button>
+      <button class="comms-chan-b js-comms-ch${commsCustCh === 'email' ? ' on' : ''}" data-ch="email" role="tab" aria-selected="${commsCustCh === 'email'}">${I.mail}<span>Email</span></button>
+    </div>` : '';
+  const title = isCust ? 'Customers' : esc(meta.label);
+  const sub = isCust ? (commsCustCh === 'email' ? 'Emailing customers' : 'Texting customers') : 'Open &amp; un-ended';
   return `<div class="cp-cap" aria-hidden="true"></div>
-    <div class="cp-head"><span class="cp-cat">${esc(meta.label)}</span><span class="cp-who">Open &amp; un-ended</span><span class="spacer"></span><button class="cp-x js-comms-menu-x" aria-label="Tuck the list away" data-tip="Tuck away — nothing ends">${I.x}</button></div>
+    <div class="cp-head"><span class="cp-cat">${title}</span><span class="cp-who">${sub}</span><span class="spacer"></span><button class="cp-x js-comms-menu-x" aria-label="Tuck the list away" data-tip="Tuck away — nothing ends">${I.x}</button></div>
+    ${chanToggle}
     <div class="cp-feed cp-list">${rows || `<div class="cp-empty">${empty}</div>`}${newRow}</div>`;
 }
 /* Mount THE open window ABOVE its own tab (Messenger metaphor, D9 single-open: at
@@ -26786,27 +26955,79 @@ function mountCommsPops() {
     }
   }
   if (sess.menuOpen && (!COMMS_CAT_META[cat].channel || commsOnline())) {
-    const at = document.querySelector(`.js-comms-chip[data-cat="${cat}"]`) || document.querySelector('.comms-rail');
+    const at = document.querySelector(`.js-comms-chip[data-cat="${cat}"]`) || document.querySelector('.js-comms-chip[data-cat="customer"]') || document.querySelector('.comms-rail');
     if (at) { const node = el('div', 'comms-pop comms-menu'); node.innerHTML = commsMenuHtml(cat); host.appendChild(node); place(node, at, 340); }
   }
   commsOpenPt = null;   // one render-cycle scope — consumed by the window mount above
+}
+// D8/D9 PHONE comms — the summoned category fills the screen (Messenger metaphor): the INBOX
+// (conversation list + the Text/Email toggle for customers) until a conversation is opened, then
+// the THREAD itself with a Back-to-inbox chevron. Reuses the exact builders desktop mounts on the
+// rail (commsMenuHtml / commsPopupHtml / commsTeamPopupHtml / commsWranglerPopupHtml), so composing,
+// sending, End, drafts and the toggle all keep working through their existing selectors.
+function mountMobileComms() {
+  if (!document.body.classList.contains('is-phone')) return;
+  const cat = state.commsRail.cat;
+  if (!cat) return;
+  const sess = state.commsRail.sessions[cat];
+  const openId = sess ? sess.lastOpen : null;
+  let inner = '';
+  if (openId != null) {
+    if (cat === 'team') inner = chatById(String(openId)) ? commsTeamPopupHtml(String(openId)) : '';
+    else if (cat === 'wrangler') inner = state.wrangler.open ? commsWranglerPopupHtml() : '';
+    else {
+      const t = commsThreadsFor(cat).find((x) => String(x.customerId) === String(openId)) || null;
+      inner = commsPopupHtml(cat, t, String(openId));
+    }
+  }
+  const host = el('div', 'mcomms');
+  if (inner) {
+    // the wrangler thread wrapper must wear .wrangler-dock — mountWranglerDock() (called each
+    // render) keys off it to hydrate image blobs + wire paste/drag-drop (parity with desktop).
+    const dockCls = cat === 'wrangler' ? ' wrangler-dock' : '';
+    host.innerHTML = `<div class="mcomms-sheet mcomms-thread${dockCls}"><button class="mcomms-back js-mcomms-back" aria-label="Back to the list">${I.chevL}<span>Back</span></button>${inner}</div>`;
+  } else {
+    host.innerHTML = `<div class="mcomms-sheet mcomms-inbox">${commsMenuHtml(cat)}</div>`;
+  }
+  $('#app').appendChild(host);
+  const feed = host.querySelector('.cp-feed:not(.cp-list), .chat-feed, .wr-feed');
+  if (feed) feed.scrollTop = feed.scrollHeight;
 }
 /* ── actions ─────────────────────────────────────────────────────────────── */
 /* Sweep a category's window off the rail when the rail leaves it (chip re-click,
    sibling chip, or any cross-category open — the single-open law's broom). */
 function commsLeaveCat(cat) {
-  if (cat === 'wrangler' && state.wrangler.open && !document.body.classList.contains('is-phone')) {
+  // Phone routes Mr. Wrangler through the rail full-screen now (not the old dock), so leaving the
+  // category must snapshot + close it on EVERY device — else state.wrangler.open never resets on
+  // phone and body.sheet-open locks the page scroll for the rest of the session.
+  if (cat === 'wrangler' && state.wrangler.open) {
     wranglerRailSnapshot(); state.wrangler.open = false; state.wrangler.min = false;
   }
 }
-function commsToggleCat(cat) {
-  const phone = document.body.classList.contains('is-phone');
-  if (phone && (cat === 'team' || cat === 'wrangler')) {
-    // phones have no rail — these chips keep bridging to the bottom-sheet docks (mobile reflow rides later)
-    if (cat === 'team') { state.chat.open = !state.chat.open; return render(); }
-    if (state.wrangler.open) { wranglerRailSnapshot(); state.wrangler.open = false; return render(); }
-    return wranglerNewChat();
+// D8 merged Customer chip — summon a customer CHANNEL ('text'|'email') onto the rail and land
+// on its menu (the Text/Email toggle rides the menu head). One thin funnel over commsToggleCat's
+// summon logic so text/email keep behaving exactly as before.
+function commsSummonChannel(ch) {
+  const cat = ch === 'email' ? 'email' : 'text';
+  const rail = state.commsRail, prev = rail.cat;
+  if (prev && prev !== cat) commsLeaveCat(prev);
+  rail.cat = cat;
+  refreshCommsThreads();
+  const s = rail.sessions[cat];
+  s.menuOpen = true; s.lastOpen = null;   // show the list + toggle; no auto-opened window
+  saveCommsRail(); render();
+}
+// The Customer chip click: reveal the channel menu (with the toggle); a second tap sweeps it shut.
+function commsToggleCustomer() {
+  const rail = state.commsRail, cur = rail.cat, curSess = cur ? rail.sessions[cur] : null;
+  if (commsCustActive() && curSess && curSess.menuOpen) {   // open menu → close
+    rail.cat = null; curSess.menuOpen = false; commsLeaveCat(cur); saveCommsRail(); return render();
   }
+  commsSummonChannel(commsCustCat());
+}
+function commsToggleCat(cat) {
+  // Phone routes team/wrangler through the SAME rail as customer comms now (mountMobileComms
+  // renders it full-screen) — the old phone-only docks are retired.
   const rail = state.commsRail;
   if (rail.cat === cat) {                                // active icon: reveal the un-ended list first (replaces the old All chip), then a further click sweeps the rail clean
     const sc = rail.sessions[cat];
